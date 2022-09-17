@@ -1,0 +1,82 @@
+#!/bin/bash
+cwd=$( pwd )
+cd ${cwd}
+RS=`readlink -f $1`
+T1dir=`readlink -f $2`
+PA=`readlink -f $3`
+AP=`readlink -f $4`
+
+for i in ${RS} ${T1dir} ${PA} ${AP}
+do
+echo "Converting ${i} dicom data to nii"
+dcm2nii ${i}/*.dcm
+done
+mkdir func
+mkdir T1
+cd func
+func=$( pwd )
+cd ${cwd}
+cd T1
+T1=$( pwd )
+cd ${cwd}
+mv ${RS}/2*.nii.gz ${func}/raw_file.nii.gz
+mv ${T1dir}/o*.nii.gz ${T1}/T1.nii.gz
+mv ${PA}/*.nii.gz ${func}/b0_pa.nii.gz
+mv ${AP}/*.nii.gz ${func}/b0_ap.nii.gz
+
+## Doing the brain extraction for the T1
+## enter this sectio if there is no brain extracted T1
+if [ ! -f ${T1}/T1_brain.nii.gz ]; then
+cd ${T1}
+bet T1.nii.gz T1_brain.nii.gz -m -R
+sleep 30 
+fsleyes T1.nii.gz T1_brain.nii.gz
+##pause continuing the script for 20 seconds
+## Ask me if I am satisfied with the brain extraction
+echo "Is the brain extraction satisfactory? (y/n)"
+read answer
+if [ $answer == "y" ]
+then
+echo "Moving on"
+else
+echo "Please enter the center of the brain in the format x y z"
+read center
+bet T1.nii.gz T1_brain.nii.gz -m -R -c ${center}
+sleep 30
+fsleyes T1.nii.gz T1_brain.nii.gz
+fi
+## Ask me if I am satisfied with the brain extraction
+echo "Is the brain extraction satisfactory? (y/n)"
+read answer
+if [ $answer == "y" ]
+then
+echo "Moving on"
+else
+echo "Please do the brain extraction manually"
+exit
+fi
+fi
+cd ${cwd}
+## Do the motion correction for the functional data
+cd ${func}
+echo "Now doing the motion correction"
+mcflirt -in raw_file.nii.gz -out inter_mc.nii.gz -plots
+
+## Susceptibility distortion correction
+## Merge the two b0 images
+echo "Now doing the susceptibility distortion correction"
+fslmerge -t b0_all.nii.gz b0_ap.nii.gz b0_pa.nii.gz
+## Do the topup
+topup --imain=b0_all.nii.gz --datain=/home/aghaffari/my_acq_param.txt --config=b02b0.cnf --out=my_topup_results --iout=b0_corr
+## Do the susceptibility distortion correction
+applytopup --imain=inter_mc.nii.gz --inindex=1 --datain=/home/aghaffari/my_acq_param.txt --topup=my_topup_results --out=inter_sc.nii.gz --method=jac -v
+
+## Get the functional data average
+fslmaths inter_sc.nii.gz -Tmean fMRI_avg.nii.gz
+
+## Spatial smoothing
+cd ${cwd}
+echo "Now doing the spatial smoothing using the FEAT template saved in the betdesign.fsf file"
+feat betdesign.fsf
+
+
